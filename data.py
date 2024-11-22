@@ -45,41 +45,98 @@ def adjustData(img,mask,flag_multi_class,num_class):
 
 
 
-def trainGenerator(batch_size,train_path,image_folder,mask_folder,aug_dict,image_color_mode = "grayscale",
-                    mask_color_mode = "grayscale",image_save_prefix  = "image",mask_save_prefix  = "mask",
-                    flag_multi_class = False,num_class = 2,save_to_dir = None,target_size = (256,256),seed = 1):
-    '''
-    can generate image and mask at the same time
-    use the same seed for image_datagen and mask_datagen to ensure the transformation for image and mask is the same
-    if you want to visualize the results of generator, set save_to_dir = "your path"
-    '''
-    image_datagen = ImageDataGenerator(**aug_dict)
-    mask_datagen = ImageDataGenerator(**aug_dict)
-    image_generator = image_datagen.flow_from_directory(
-        train_path,
-        classes = [image_folder],
-        class_mode = None,
-        color_mode = image_color_mode,
-        target_size = target_size,
-        batch_size = batch_size,
-        save_to_dir = save_to_dir,
-        save_prefix  = image_save_prefix,
-        seed = seed)
-    mask_generator = mask_datagen.flow_from_directory(
-        train_path,
-        classes = [mask_folder],
-        class_mode = None,
-        color_mode = mask_color_mode,
-        target_size = target_size,
-        batch_size = batch_size,
-        save_to_dir = save_to_dir,
-        save_prefix  = mask_save_prefix,
-        seed = seed)
-    train_generator = zip(image_generator, mask_generator)
-    for (img,mask) in train_generator:
-        img,mask = adjustData(img,mask,flag_multi_class,num_class)
-        yield (img,mask)
+# def trainGenerator(batch_size,train_path,image_folder,mask_folder,aug_dict,image_color_mode = "grayscale",
+#                     mask_color_mode = "grayscale",image_save_prefix  = "image",mask_save_prefix  = "mask",
+#                     flag_multi_class = False,num_class = 2,save_to_dir = None,target_size = (256,256),seed = 1):
+#     '''
+#     can generate image and mask at the same time
+#     use the same seed for image_datagen and mask_datagen to ensure the transformation for image and mask is the same
+#     if you want to visualize the results of generator, set save_to_dir = "your path"
+#     '''
+#     image_datagen = ImageDataGenerator(**aug_dict)
+#     mask_datagen = ImageDataGenerator(**aug_dict)
+#     image_generator = image_datagen.flow_from_directory(
+#         train_path,
+#         classes = [image_folder],
+#         class_mode = None,
+#         color_mode = image_color_mode,
+#         target_size = target_size,
+#         batch_size = batch_size,
+#         save_to_dir = save_to_dir,
+#         save_prefix  = image_save_prefix,
+#         seed = seed)
+#     mask_generator = mask_datagen.flow_from_directory(
+#         train_path,
+#         classes = [mask_folder],
+#         class_mode = None,
+#         color_mode = mask_color_mode,
+#         target_size = target_size,
+#         batch_size = batch_size,
+#         save_to_dir = save_to_dir,
+#         save_prefix  = mask_save_prefix,
+#         seed = seed)
+#     train_generator = zip(image_generator, mask_generator)
+#     for (img,mask) in train_generator:
+#         img,mask = adjustData(img,mask,flag_multi_class,num_class)
+#         yield (img,mask)
 
+def load_flow(file_path):
+    '''
+    Load a flow file .flo
+    '''
+    with open(file_path, 'rb') as f:
+        magic = np.fromfile(f, np.float32, count=1)
+        if magic!= 202021.25:
+            raise ValueError("Magic number mismatch, invalid .flo file")
+        h = np.fromfile(f, np.int32, 1)[0]
+        w = np.fromfile(f, np.int32, 1)[0]
+        data = np.fromfile(f, np.float32, count = 2*h*w).reshape((h, w, 2))
+        flow = np.resize(data, (h, w, 2))
+
+        return flow
+
+def trainGeneratorFlyingChairs(batch_size, data_path, aug_dict, target_size = (256,256),seed = 1):
+    '''
+    Can generate image triplets (img1, flow, img2) for the training (from FlyingChairs)
+    '''
+
+    files = sorted(glob.glob(os.path.join(data_path, "*.ppm")))
+    flow_files = sorted(glob.glob(os.path.join(data_path, "*.flow")))
+
+    img1_files = [f for f in files if "img1" in f]
+    img2_files = [f for f in files if "img2" in f]
+
+    image_datagen = ImageDataGenerator(**aug_dict)
+
+    while True:
+        for i in range(0, len(img1_files), batch_size):
+            batch_img1 = []
+            batch_flow = []
+            batch_img2 = []
+            
+            for j in range(i, min(i + batch_size, len(img1_files))):
+                img1 = io.imread(img1_files[j], as_gray = True)
+                img1 = img1 / 255.0
+                img1 = trans.resize(img1, target_size)
+                img1 = np.resize(img1, target_size + (1,))
+
+                img2 = io.imread(img2_files[j], as_gray = True)
+                img2 = img2 / 255.0
+                img2 = trans.resize(img2, target_size)
+                img2 = np.resize(img2, target_size + (1,))
+
+                flow = load_flow(flow_files[j-1])
+                flow = trans.resize(flow, target_size + (2,))
+
+                batch_img1.append(img1)
+                batch_img1.append(img2)
+                batch_flow.append(flow)
+            
+            batch_img1 = np.array(batch_img1)
+            batch_img2 = np.array(batch_img2)
+            batch_flow = np.array(batch_flow)
+
+            yield ([batch_img1, batch_flow], batch_img2)
 
 
 def testGenerator(test_path,num_image = 30,target_size = (256,256),flag_multi_class = False,as_gray = True):
